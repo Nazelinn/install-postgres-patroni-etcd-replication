@@ -1,0 +1,91 @@
+scope: {{ scope }}
+name: {{ hostvars[inventory_hostname]['db_name'] }}
+restapi:
+  listen: {{ ansible_default_ipv4.address }}:8008
+  connect_address: {{ ansible_default_ipv4.address }}:8008
+etcd:
+     hosts: {% for host in groups['etcd_cluster'] %}{% set hostvar = hostvars[host] %}{% if hostvar.ansible_host is defined %}{{ hostvar.ansible_host.split(":")[0] }}:2379{% if not loop.last %},{% endif%}{% endif %}{%- endfor %}
+
+bootstrap:
+    dcs:
+        ttl: 100
+        loop_wait: 10
+        retry_timeout: 10
+        maximum_lag_on_failover: 1048576
+        postgresql:
+            use_pg_rewind: true
+            use_slots: true
+            parameters:
+                    listen_addresses: '*'
+                    wal_level: logical
+                    hot_standby: "on"
+                    max_connections: 200
+                    wal_keep_segments: 256
+                    max_wal_senders: 10
+                    max_replication_slots: 10
+                    checkpoint_timeout: 30
+                    wal_log_hints: "on"
+                    hot_standby_feedback : "on"
+                    work_mem: 25MB
+                    min_wal_size: 1GB
+                    max_wal_size: 4GB
+                    max_worker_processes: 80
+                    max_parallel_workers_per_gather: 4
+                    max_parallel_workers: 80
+                    max_parallel_maintenance_workers: 4
+                    shared_buffers : 2GB
+                    effective_cache_size : 1GB
+                    maintenance_work_mem : 2GB
+                    checkpoint_completion_target : 0.9
+                    wal_buffers : 16MB
+                    random_page_cost : 1.1
+                    effective_io_concurrency : 200
+                    track_counts : "on"
+                    autovacuum : "on"
+                    autovacuum_vacuum_scale_factor : 0.15
+                    autovacuum_analyze_scale_factor : 0.08
+                    seq_page_cost : 0.8
+                    log_line_prefix : '%t [%p] user=%u,db=%d,app=%a,client=%h '
+                    log_filename : "postgresql-%Y-%m-%d.log"
+                    log_min_duration_statement : 500
+                    log_autovacuum_min_duration : 0
+                    log_lock_waits : "on"
+                    log_checkpoints : "on"
+                    log_temp_files : 0
+                    shared_preload_libraries: pg_stat_statements, pg_repack
+initdb:
+    - encoding: UTF8
+    - data-checksums
+pg_hba:
+    - host replication replica 127.0.0.1/32 md5
+    - host replication replica {{ groups['servers'][0] }}/32 md5
+    - host replication replica {{ groups['servers'][1] }}/32 md5
+    - host all all 0.0.0.0/0 md5
+users:
+        admin:
+            password: admin
+            options:
+                - createrole
+                - createdb
+postgresql:
+    listen: 0.0.0.0
+    connect_address: {{ ansible_default_ipv4.address }}:5432
+    data_dir: /var/lib/pgsql/14/data
+    bin_dir: /usr/pgsql-14/bin
+    pgpass: /tmp/pgpass
+    authentication:
+        replication:
+            username: replica
+            password: replica
+        superuser:
+            username: postgres
+            password: {{ PGPASSWORD }}
+    parameters:
+        unix_socket_directories: '/tmp'
+tags:
+    nofailover: false
+    noloadbalance: false
+    clonefrom: false
+    nosync: false
+log:
+   dir: /var/log/patroni
