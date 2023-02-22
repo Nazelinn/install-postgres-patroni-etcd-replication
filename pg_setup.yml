@@ -1,0 +1,344 @@
+- hosts: pg-servers
+  roles:
+   - free-disk-space-alert
+
+- hosts: pg-servers
+  roles:
+   - deletelog
+
+- name: Get PostgreSQL Version
+  hosts: pg-servers
+  vars_prompt:
+    - name: "version"
+      prompt: "Which PostgreSQL version do you want to install? (11 or 12 or 13 or 14)"
+      private: no
+
+  tasks:
+
+
+  - name: Install dependencies
+    yum:
+      name:
+        - gcc
+        - python-devel
+        - epel-release
+        - python3-devel
+        - python-psycopg2
+      state: present
+    when: version == "13" or  version == "14"
+
+
+  - name: Install the PostgreSQL 14 repository RPM
+    become: yes
+    yum:
+      name: https://download.postgresql.org/pub/repos/yum/reporpms/EL-7-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+      state: present
+    when: version == "14"
+
+
+  - name: Install PostgreSQL
+    become: yes
+    yum:
+      name:
+        -  postgresql{{version}}-server
+        -  postgresql{{version}}-contrib
+        -  python3-psycopg2
+        -  python-psycopg2
+        -  postgresql{{version}}-plpython3
+      state: present
+
+  - name: Install pg-repack package
+    yum:
+      name: pg_repack_{{version}}
+      state: present
+    when: version == "14"
+
+
+  - name: Enable postgresql-14 service
+    become: yes
+    systemd:
+      name: postgresql-{{version}}
+      enabled: yes
+
+
+  -  name: Install packages with pip3
+     become: yes
+     shell: | 
+            pip3 install urllib3==1.23
+            pip3 install requests
+            pip3 install --upgrade setuptools
+            pip3 install python-etcd
+     when: version == "13" or  version == "14"
+
+           
+  -  name: Install sshpass with yum and  Copy to Another Nodes 
+     become: yes
+     shell: |
+       yum install sshpass -y 
+       ssh-keygen -t rsa -f /root/.ssh/id_rsa -q -P ""
+       sshpass -p "Srvhb0420" ssh-copy-id -o StrictHostKeyChecking=no root@{{ groups['pg-slaves'][0] }}
+
+
+  - name: Install patroni package
+    become: yes
+    yum:
+      name: patroni
+      state: present
+    when: version == "13" or  version == "14"
+
+
+  - name: Create patroni configuration directory
+    become: yes
+    file:
+      path: /etc/patroni
+      state: directory
+      mode: 755
+
+  - name: Find patroni directory
+    find:
+     paths: /usr/share/doc/
+     file_type: directory
+     patterns: patroni*
+    register: result
+
+  - name: Copy patroni.yml file
+    become: yes
+    copy:
+      src: "{{ result.files[0].path }}/postgres0.yml"
+      dest: /etc/patroni/patroni.yml
+      remote_src: yes
+      mode: 644
+    when: result.files | length > 0
+
+
+  - name: Create patroni log directory
+    become: yes
+    file:
+     path: /var/log/patroni
+     state: directory
+     owner: postgres
+     group: postgres
+     mode: 755
+
+
+  - name: Rename patroni.yml file
+    become: yes
+    shell: |
+     cd  /etc/patroni/
+      mv /etc/patroni/patroni.yml /etc/patroni/patroni_old.yml
+
+
+
+  - name: Configure Patroni
+    template:
+      src: templates/patroni.yml.j2
+      dest: /etc/patroni/patroni.yml
+      #owner: postgres
+      #group: postgres
+      #mode: 0640
+
+  - name: PGBadger client install
+    shell: |
+       yum install -y perl perl-devel
+       wget https://github.com/darold/pgbadger/archive/v11.8.tar.gz
+       tar xzvf v11.8.tar.gz
+       cd pgbadger-11.8
+       perl Makefile.PL
+       make && sudo make install 
+
+  - name: Copy SQL File for Disk Free Space Function
+    template:
+       src:  templates/pgbadger_client_sh.j2
+       dest: /usr/pgsql-{{version}}/bin/runpgbadger.sh
+       mode: 755
+       owner: postgres
+
+  - name: PGBadger cronjob create
+    cron:
+       name: "Run Daily PGBadger"
+       minute: "0"
+       hour: "1"
+       day: "*"
+       month: "*"
+       weekday: "*"
+       job: /bin/bash /usr/pgsql-{{version}}/bin/runpgbadger.sh
+
+
+- hosts: pg-master
+  gather_facts: no
+  tasks: 
+
+  - name: Start patroni on the  nodes
+    become: yes
+    systemd:
+      name: patroni
+      state: started
+      enabled: yes
+
+  - name: Find PostgreSQL data folder
+    find:
+      paths: /var/lib/pgsql/14/
+      file_type: directory
+      patterns: data*
+    register: found_data_folder
+
+
+  - name: Rename PostgreSQL data folder
+    command: mv "{{ found_data_folder.files[0].path }}" /var/lib/pgsql/14/data_old
+    when: found_data_folder.matched > 0
+
+  - name: again rename data folder
+    command: mv /var/lib/pgsql/14/data_old /var/lib/pgsql/14/data
+    when: found_data_folder.matched > 0
+
+
+
+  #-  name: Switch to postgres user and start postgreql
+    # become: yes
+    # become_user: postgres 
+    # shell: |
+     #  /usr/pgsql-14/bin/pg_ctl -D /var/lib/pgsql/14/data -l logfile start
+
+
+- hosts: pg-slaves
+  gather_facts: no
+  tasks:
+
+  - name: Start patroni on the  nodes
+    become: yes
+    systemd:
+      name: patroni
+      state: started
+      enabled: yes
+
+
+- hosts: etcd_cluster
+  gather_facts: no
+  tasks:
+
+  - name: Install GCC, Python development library and EPEL repository
+    yum:
+      name:
+        - gcc
+        - python-devel
+        - epel-release
+      state: present
+
+  - name: Install etcd
+    yum:
+      name: etcd
+      state: present
+
+  - name: Backup old etcd configuration 
+    become: yes
+    shell: |
+        cd  /etc/etcd/
+        mv /etc/etcd/etcd.conf /etc/etcd/etcd_old.conf
+
+  - name: Configure etcd
+    template:
+      src: templates/etcd.conf.j2
+      dest: /etc/etcd/etcd.conf
+      owner: root
+      group: root
+      mode: 0640
+
+
+  - name: Enable and start etcd
+    service:
+      name: etcd
+      enabled: true
+      state: started
+
+  - name: Wait for 20 seconds
+    pause:
+     seconds: 20
+
+- hosts: pg-master
+  gather_facts: no
+  tasks:
+
+  - name: Enable postgres user to login to pg_hba.conf
+    blockinfile:
+      path: /var/lib/pgsql/14/data/pg_hba.conf
+      block: |
+        {% for host in groups['servers'] %}
+        host    replication     replica     {{ host }}/32    md5
+        host    all             postgres    {{ host }}/32    md5 
+        host    all             pmm_user    {{ host }}/32    md5 
+        {% endfor %}
+
+  - name: Restart again patroni service for pg_hba.conf
+    shell: |
+      systemctl restart patroni
+
+- hosts: pg-slaves
+  gather_facts: no
+  tasks:
+   - name: Restart again patroni service for pg_hba.conf
+     shell: |
+      systemctl restart patroni
+
+
+- hosts: pg-master
+  gather_facts: no
+  tasks:
+   - name: PMM user and database create in master postgres node
+     shell: |
+       cd /tmp
+       sudo -u postgres PGPASSWORD={{ PGPASSWORD }} psql -h {{ groups['pg-master'][0] }}  -c "CREATE USER pmm_user WITH PASSWORD 'X';"
+       sudo -u postgres PGPASSWORD={{ PGPASSWORD }} psql -h {{ groups['pg-master'][0] }}  -c "ALTER USER pmm_user WITH SUPERUSER;"
+       sudo -u postgres PGPASSWORD={{ PGPASSWORD }} psql -h {{ groups['pg-master'][0] }}  -c "CREATE DATABASE pmm_user;"
+     when: inventory_hostname in groups['pg-master'] 
+
+
+- hosts: servers
+  gather_facts: no
+  tasks:
+   - name: PMM client install for Percona Monitoring
+     shell: |
+       yum install https://repo.percona.com/yum/percona-release-latest.noarch.rpm -y
+       yum install pmm2-client -y
+       pmm-admin config --server-insecure-tls --server-url https://pmmadmin:X@pmmhost --force
+       pmm-admin add postgresql --host="{{ groups['servers'][0] }}" --password='XpLm9YSK' --port=5432 --username=pmm_user --cluster={{groups['pg-pmm-cluster'][0]}}
+       pmm-admin add postgresql --host="{{ groups['servers'][1] }}" --password='XpLm9YSK' --port=5432 --username=pmm_user --cluster={{groups['pg-pmm-cluster'][0]}}
+
+
+
+- hosts: servers
+  gather_facts: true
+  tasks:
+   - name: Install PGBouncer
+     include_tasks: pg_bouncer.yml
+
+
+   - name: create appuser
+     shell: |
+       cd /tmp
+       sudo -u postgres PGPASSWORD={{ PGPASSWORD }} psql -h {{ groups['pg-master'][0] }}  -c "CREATE USER appuser WITH PASSWORD '{{ appuser }}';"
+     when: inventory_hostname in groups['pg-master']  
+
+
+   - name: Create Function Get Free Disk Space for DB Dashboard
+     include_tasks: pg_diskfreespace.yml
+     when: inventory_hostname in groups['pg-master']
+
+
+   - name: Send host informations to Slack
+     slack:
+       token: "slacktoken"
+       msg: '{{ ansible_ssh_host }} {{ ansible_hostname }} Patroni,Etcd,Postgres kurulumu tamamlandi. PMM kurulumu gerceklestirildi. User: postgres Password: {{hostvars[groups["pg-servers"][0]]["PGPASSWORD"]}}  User: appuser Password: {{hostvars[groups["pg-servers"][0]]["appuser"]}}' 
+       channel: #testnza
+       color: good
+       username: ''
+       icon_url: '' 
+
+
+- hosts: pgbadger
+  tasks:
+
+  - name: Edit pgbadger file directory
+    file:
+      path: /var/www/html/{{groups['pg-pmm-cluster'][0]}}/{{ hostvars[item]['ansible_hostname'] }}
+      state: directory
+    with_items: '{{ groups["servers"] }}'

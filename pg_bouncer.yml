@@ -1,0 +1,26 @@
+ - name: pgbouncer install
+   shell: yum install pgbouncer -y
+
+ - name: replace line in  "etc/pgbouncer/pgbouncer.ini"
+   lineinfile:
+     dest: /etc/pgbouncer/pgbouncer.ini
+     regexp: '{{item.From}}'
+     line: '{{item.To}}'
+   with_items:
+    - { From: ';foodb =', To: '* = port=5432 auth_user=postgres'}
+    - { From: 'listen_addr = 127.0.0.1', To: 'listen_addr = *'}
+    - { From: 'auth_type = trust', To: 'auth_type = md5'}
+    - { From: 'pool_mode = session', To: 'pool_mode = transaction'}
+    - { From: 'max_client_conn = 100', To: 'max_client_conn = 2000'}
+    - { From: 'default_pool_size = 20', To: 'default_pool_size = 100'}
+    - { From: ';ignore_startup_parameters = extra_float_digits', To: 'ignore_startup_parameters = extra_float_digits'}
+
+ - name: create userlist.txt file
+   shell: |
+     touch /etc/pgbouncer/userlist.txt
+     chown postgres:postgres /etc/pgbouncer/userlist.txt
+     cd /tmp
+      sudo -u postgres PGPASSWORD={{ PGPASSWORD }} psql -h {{ groups['pg-master'][0] }} -c "COPY (SELECT '\"' || rolname || '\" \"' || CASE WHEN rolpassword IS null THEN '' ELSE rolpassword END || '\"' FROM pg_authid where rolpassword IS NOT NULL ) TO '/etc/pgbouncer/userlist.txt';"
+      sudo -u postgres PGPASSWORD={{ PGPASSWORD }} psql -h {{ groups['pg-slaves'][0] }} -c "COPY (SELECT '\"' || rolname || '\" \"' || CASE WHEN rolpassword IS null THEN '' ELSE rolpassword END || '\"' FROM pg_authid where rolpassword IS NOT NULL ) TO '/etc/pgbouncer/userlist.txt';"
+     systemctl enable pgbouncer.service
+     systemctl restart pgbouncer
