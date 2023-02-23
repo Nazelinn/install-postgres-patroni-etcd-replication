@@ -300,8 +300,8 @@
        yum install https://repo.percona.com/yum/percona-release-latest.noarch.rpm -y
        yum install pmm2-client -y
        pmm-admin config --server-insecure-tls --server-url https://pmmadmin:X@pmmhost --force
-       pmm-admin add postgresql --host="{{ groups['servers'][0] }}" --password='XpLm9YSK' --port=5432 --username=pmm_user --cluster={{groups['pg-pmm-cluster'][0]}}
-       pmm-admin add postgresql --host="{{ groups['servers'][1] }}" --password='XpLm9YSK' --port=5432 --username=pmm_user --cluster={{groups['pg-pmm-cluster'][0]}}
+       pmm-admin add postgresql --host="{{ groups['servers'][0] }}" --password='X' --port=5432 --username=pmm_user --cluster={{groups['pg-pmm-cluster'][0]}}
+       pmm-admin add postgresql --host="{{ groups['servers'][1] }}" --password='X' --port=5432 --username=pmm_user --cluster={{groups['pg-pmm-cluster'][0]}}
 
 
 
