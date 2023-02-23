@@ -76,7 +76,7 @@
      shell: |
        yum install sshpass -y 
        ssh-keygen -t rsa -f /root/.ssh/id_rsa -q -P ""
-       sshpass -p "Srvhb0420" ssh-copy-id -o StrictHostKeyChecking=no root@{{ groups['pg-slaves'][0] }}
+       sshpass -p "X" ssh-copy-id -o StrictHostKeyChecking=no root@{{ groups['pg-slaves'][0] }}
 
 
   - name: Install patroni package
